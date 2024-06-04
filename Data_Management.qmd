@@ -1,0 +1,163 @@
+```{r echo=FALSE}
+library(tidyverse)
+library(readxl)
+library(readr)
+library(DBI)
+library(RSQLite)
+library(dplyr)
+```
+
+
+# Task 1
+> 1. myfolder/"MyData.csv"
+2. R projects is useful as it is allows for reproducibility, collaboration, and feedback.
+3. Git is an open source version control tool for code and GitHub is a cloud-based service that allows for Git repository management.
+4. The difference between tibble and data frames is tibble preserves all variable types, but data frames have the option to covert strings to factors.
+5. as_tibble(iris) |>
+  select(start_with("Petal"), Species) |>
+  filter(Petal.Length < 1.55) |>
+  arrange(Species)
+6. Long format data is where each row consists of one observation and each column consists of one variable. Where wide format data is where more than one observation is in a given row. Statisticians prefer long form data for a nicer analysis.
+>
+
+# Task 2
+Reading in glass data, changing type of glass variable (previously numeric) into descriptions, and selecting rows were Fe < .2 and type of glass is tableware or headlamps.
+```{r Glass}
+glass<-read_delim(file = "https://www4.stat.ncsu.edu/~online/datasets/glass.data" , delim = ",", col_names = c("ID", "RI", "Na", "Mg", "Al", "Si", "K", "Ca", "Ba", "Fe", "Type_of_Glass"))
+
+glass
+
+glass |>
+  mutate(Type_of_Glass = ifelse(Type_of_Glass %in% 1, "building_windows_float_processed",
+                                 ifelse(Type_of_Glass %in% 2, "building_windows_non_float_processed",
+                                        ifelse(Type_of_Glass %in% 3, "vehicle_windows_float_processed",
+                                               if_else(Type_of_Glass %in% 4, " vehicle_windows_non_float_processed",
+                                                      if_else(Type_of_Glass %in% 5, "containers",
+                                                             if_else(Type_of_Glass %in% 6, "tableware",
+                                                                    if_else(Type_of_Glass %in% 7, "headlamps", "N/A")))))))
+       ) |>
+  filter((Fe < .2) & (Type_of_Glass == "tableware" | Type_of_Glass == "headlamps"))
+
+```
+
+Reading in Yeast data, removing seq_names and nuc columns and creating mean and median columns that coordinate to the remaining numeric.
+```{r Yeast}
+yeast<-read_table(file = "https://www4.stat.ncsu.edu/~online/datasets/yeast.data",
+                   col_names = c("seq_name", "mcg", "gvh", "alm", "mit", "erl", "pox", "vac", "nuc", "class"))
+
+yeast
+
+yeast |>
+  subset(select = -c(seq_name, nuc)) |>
+  mutate(across(where(is.numeric), list(mean=mean, median=median), .names = "{.col}_{.fn}")) 
+
+```
+# Task 3
+Read in White wine data, rename columns, and create variable denoting data comes from white wine.
+```{r White Wine}
+white_wine <- read_excel("C:/Users/beard/Downloads/white-wine.xlsx")
+
+white_wine_columns<-read_excel("C:/Users/beard/Downloads/white-wine.xlsx", sheet = 2)
+
+colnames(white_wine)<-white_wine_columns$Variables
+
+white_wine
+
+white_wine_type<-add_column(white_wine, wine_type="white")
+
+white_wine_type
+```
+Read in red wine, rename columns, and create variable denoting data comes from red wine.
+```{r Red Wine}
+red_wine <- read_delim("C:/Users/beard/Downloads/red-wine.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+colnames(red_wine)<-white_wine_columns$Variables
+
+red_wine
+
+red_wine_type<-add_column(red_wine, wine_type="red")
+
+red_wine_type
+```
+Combine white wine and red wine data. Then, only select rows with quality > 6.5 and alcohol < 132, sort by descending quality, selecting only citric acid, alcohol, wine, and quality columns, and create mean and standard deviation columns for alcohol grouped by quality.
+```{r Combine}
+wines<- dplyr::bind_rows(white_wine_type,red_wine_type)
+
+wines
+
+wines |>
+  filter((quality > 6.5) & (alcohol < 132)) |>
+  arrange(desc(quality)) |>
+  subset(select = c(citric_acid, alcohol, wine_type, quality)) |>
+  group_by(quality) |>
+  mutate(across(alcohol, list(mean=mean, sd=sd), .names = "{.col}_{.fn}"))
+
+```
+# Task 4
+connecting to data base.
+```{r Data Base connect}
+con <- dbConnect(SQLite(), "lahman (1).db")
+dbListTables(con)
+```
+
+Retrieving the Teams data set for year 2015 in 2 different ways.
+``` {r Teams}
+tbl(con, "Teams") |>
+  filter(yearID == 2015)
+
+tbl(con, sql(" SELECT *
+             FROM `Teams`
+             WHERE (`yearID` = 2015.0)"))
+```
+
+Retrieving data from those inducted in the hall of fame and selecting player, year, and category columns. Then, joining this data set with the People data set to get first and last names for inductees.
+``` {r hall of fame}
+
+tbl(con, "HallOfFame") |>
+  filter(inducted == "Y") |>
+  select(playerID, yearID, category)
+
+right_join(tbl(con, "People") |>
+  select(playerID, nameFirst, nameLast),
+  tbl(con, "HallOfFame") |>
+  filter(inducted == "Y") |>
+  select(playerID, yearID, category),
+  by = join_by(playerID))
+```
+
+Retrieving data for managers, their playerID, Games, Wins, and Losses. Then, grouping by player ID creating columns to sum their games, wins, and losses and create column of win/loss percentage and sorting by highest to lowest of said percentage.
+``` {r Managers}
+tbl(con, "Managers") |>
+  select(playerID, G, W, L) |>
+  group_by(playerID) |>
+  summarize(G_managed = sum(G, na.rm = TRUE),
+  Total_W = sum(W, na.rm = TRUE),
+  Total_L = sum(L, na.rm = TRUE)) |>
+  collect() |>
+  mutate(W_L_percentage = (Total_W / G_managed)*100) |>
+  arrange(desc(W_L_percentage))
+```
+
+Completely joining the first join (hall of fame people) and managers with calculated statistics.
+``` {r Join}
+inner_join((right_join(tbl(con, "People") |>
+  select(playerID, nameFirst, nameLast),
+  tbl(con, "HallOfFame") |>
+  filter(inducted == "Y") |>
+  select(playerID, yearID, category),
+  by = join_by(playerID))),
+  tbl(con, "Managers") |>
+  select(playerID, G, W, L) |>
+  group_by(playerID) |>
+  summarize(G_managed = sum(G, na.rm = TRUE),
+  Total_W = sum(W, na.rm = TRUE),
+  Total_L = sum(L, na.rm = TRUE)) |>
+  collect() |>
+  mutate(W_L_percentage = (Total_W / G_managed)*100) |>
+  arrange(desc(W_L_percentage)),
+  by = join_by(playerID),
+  copy= TRUE)
+  
+```
+
